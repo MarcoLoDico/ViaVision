@@ -1,0 +1,15 @@
+# created by virtualenv automatically
+venv/Lib
+venv/
+
+# Don't push any videos
+*.mp4
+*.avi
+*.mov
+*.mkv
+
+# Don't push the model
+*.pt
+
+.idea/
+*.iml

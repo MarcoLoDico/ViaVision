@@ -1,33 +1,34 @@
-import socket
+import asyncio
+import websockets
 
 
-# Setup socket for TCP protocol using IPv4
-def start_server():
-    host = '127.0.0.1'
-    port = 12345
+async def handle_connection(websocket, path, shared_data_obj):
+    print("Connection established")
+    try:
+        while True:
+            # Receive data from UE5
+            data = await websocket.recv()
+            print(f"Raw data received: {data}")
 
-    # Create a socket object
-    server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # Connect the socket to the address
-    server_socket.bind((host, port))
-
-    # Connect one at a time
-    server_socket.listen(1)
-    print("Waiting for connection...")
-
-    # Accecpt UE5 connection
-    conn, addr = server_socket.accept()
-    print(f"Connected to {addr}")
-
-    # Receive data
-    while True:
-        data = conn.recv(1024).decode()  # Determine how much data is recieved
-        if not data:
-            break  # Stop if no data is received
-        print(f"Received from Unreal Engine: {data}")  # This would be the coordinates or other data
-
-    conn.close()
+            if data:
+                try:
+                    shared_data_obj.update_data(data)
+                    print(f"Updated shared data: {shared_data_obj.get_data()}")
+                except Exception as e:
+                    print(f"Error processing data: {e}")
+            else:
+                print("Received empty or invalid data")
+    except websockets.ConnectionClosed:
+        print("Connection closed")
 
 
-start_server()
+async def start_server(shared_data_obj):
+    # Start WebSocket server
+    server = await websockets.serve(
+        lambda ws, path: handle_connection(ws, path, shared_data_obj), '127.0.0.1', 12345)
+    print("WebSocket server listening on ws://127.0.0.1:12345")
+    await server.wait_closed()
+
+
+def run_socket_server(shared_data_obj):
+    asyncio.run(start_server(shared_data_obj))

@@ -1,142 +1,118 @@
 import cv2 as cv
 import numpy as np
 import torch
-import os
-import torchvision
+import time
 import socketServer
+from sharedData import SharedData
+import coordinateCalculator
 from ultralytics import YOLO
+import mss
+import multiprocessing
+from multiprocessing.managers import BaseManager
 
 
-# Check that the correct versions are installed
-print(torch.__version__)
-print(torchvision.__version__)
-print(torch.version.cuda)
-
-# Yolo classes
-names = {0: 'person', 1: 'bicycle', 2: 'car',
-         3: 'motorcycle',
-         4: 'airplane',
-         5: 'bus',
-         6: 'train',
-         7: 'truck',
-         8: 'boat',
-         9: 'traffic light',
-         10: 'fire hydrant',
-         11: 'stop sign',
-         12: 'parking meter',
-         13: 'bench',
-         14: 'bird',
-         15: 'cat',
-         16: 'dog',
-         17: 'horse',
-         18: 'sheep',
-         19: 'cow',
-         20: 'elephant',
-         21: 'bear',
-         22: 'zebra',
-         23: 'giraffe',
-         24: 'backpack',
-         25: 'umbrella',
-         26: 'handbag',
-         27: 'tie',
-         28: 'suitcase',
-         29: 'frisbee',
-         30: 'skis',
-         31: 'snowboard',
-         32: 'sports ball',
-         33: 'kite',
-         34: 'baseball bat',
-         35: 'baseball glove',
-         36: 'skateboard',
-         37: 'surfboard',
-         38: 'tennis racket',
-         39: 'bottle',
-         40: 'wine glass',
-         41: 'cup',
-         42: 'fork',
-         43: 'knife',
-         44: 'spoon',
-         45: 'bowl',
-         46: 'banana',
-         47: 'apple',
-         48: 'sandwich',
-         49: 'orange',
-         50: 'broccoli',
-         51: 'carrot',
-         52: 'hot dog',
-         53: 'pizza',
-         54: 'donut',
-         55: 'cake',
-         56: 'chair',
-         57: 'couch',
-         58: 'potted plant',
-         59: 'bed',
-         60: 'dining table',
-         61: 'toilet',
-         62: 'tv',
-         63: 'laptop',
-         64: 'mouse',
-         65: 'remote',
-         66: 'keyboard',
-         67: 'cell phone',
-         68: 'microwave',
-         69: 'oven',
-         70: 'toaster',
-         71: 'sink',
-         72: 'refrigerator',
-         73: 'book',
-         74: 'clock',
-         75: 'vase',
-         76: 'scissors',
-         77: 'teddy bear',
-         78: 'hair drier',
-         79: 'toothbrush'}
-
-# Find the absolute path to the video. This fixes a bug
-video_path = "testVideo0-hasBackgroundAudio.mp4"
-print("Absolute path:", os.path.abspath(video_path))
-
-# Starts the socket server
-socketServer.start_server()
-
-cap = cv.VideoCapture(video_path)
-
-# Using the medium sized model
-model = YOLO("yolov8m.pt")
-
-if not cap.isOpened():
-    print("Error: Could not open video.")
-    exit()
-
-# Shows the FPS
-'''
-fps = cap.get(cv.CAP_PROP_FPS)
-print(f"Frames per second: {fps}")
-'''
-
-while True:
-    ret, frame = cap.read()
-    if not ret:
-        print("Error: Could not read frame.")
-        break
-
-    results = model(frame)
-    results = results[0]
-    boundBox = np.array(results.boxes.xyxy.cpu(), dtype="int")
-    classes = np.array(results.boxes.cls.cpu(), dtype="int")
-    confidences = np.array(results.boxes.conf.cpu(), dtype="float")  # Get confidence scores
-
-    for cls, boundary, confidence in zip(classes, boundBox, confidences):
-        (x, y, x2, y2) = boundary
-        cv.rectangle(frame, (x, y), (x2, y2), (0, 0, 225), 2)
-
-        label = f"{names[cls]} {confidence:.2f}"  # Display class and confidence
-        cv.putText(frame, label, (x, y - 5), cv.FONT_HERSHEY_PLAIN, 3, (0, 0, 225), 2)
+class SharedDataManager(BaseManager):
+    pass
 
 
-    cv.imshow("Img", frame)
+SharedDataManager.register('SharedData', SharedData)
 
-    key = cv.waitKey(12)
 
-cap.release()
-cv.destroyAllWindows()
+def main_loop(shared_data_obj):
+    global prev_time
+    prev_time = 0
+
+    # Important YOLO class labels
+    names = {2: 'car', 11: 'stop sign'}
+
+    # Load YOLO model
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = YOLO("yolov8s.pt").to(device)
+
+    # Target frame rate (FPS)
+    target_fps = 30
+    frame_interval = 1 / target_fps
+
+    # Screen capture setup using mss
+    sct = mss.mss()
+    monitor = {"top": 0, "left": 0, "width": 2560, "height": 1440}
+
+    prev_time = 0
+
+    while True:
+        current_time = time.time()
+        if (current_time - prev_time) >= frame_interval:
+            prev_time = current_time  # Update the timer
+
+            # Capture the screen
+            sct_img = sct.grab(monitor)
+            frame = np.array(sct_img)
+            frame = cv.cvtColor(frame, cv.COLOR_BGRA2BGR)
+
+            # Access the current coordinates from shared data
+            current_coordinates = shared_data_obj.get_data()  # Use get_data from SharedData class
+            print(f"Shared data: {current_coordinates}")
+
+            if current_coordinates is None:
+                current_coordinates = "0,0,0,0"
+
+            # YOLO detection
+            with torch.no_grad():  # Reduces memory consumption
+                results = model(frame, conf=0.2, classes=[11])  # Focus on stop signs
+
+            results = results[0]
+            boundBox = np.array(results.boxes.xyxy.cpu(), dtype="int")
+            classes = np.array(results.boxes.cls.cpu(), dtype="int")
+            confidences = np.array(results.boxes.conf.cpu(), dtype="float")
+
+            for cls, boundary, confidence in zip(classes, boundBox, confidences):
+                (x, y, x2, y2) = boundary
+
+                # Calculate size and location on screen
+                width = x2 - x
+                height = y2 - y
+                center_x = x + width // 2
+                center_y = y + height // 2
+
+                # Print details of the detected object
+                print(f"Detected {names[cls]}:")
+                print(f" - Location (top-left): ({x}, {y})")
+                print(f" - Size (width x height): {width} x {height}")
+                print(f" - Center location: ({center_x}, {center_y})")
+
+                # Draw bounding boxes on the original frame
+                cv.rectangle(frame, (x, y), (x2, y2), (0, 0, 225), 2)
+                label = f"{names[cls]} {confidence:.2f}"
+                cv.putText(frame, label, (x, y - 5), cv.FONT_HERSHEY_PLAIN, 2, (0, 0, 225), 2)
+
+                predicted_coordinates = coordinateCalculator.predict_coordinates(height, center_x, current_coordinates)
+                print(f"Predicted coordinates: {predicted_coordinates}")
+
+            # Display FPS on the frame
+            fps_text = f"FPS: {int(1 / frame_interval)}"
+            cv.putText(frame, fps_text, (10, 30), cv.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+
+            # Display the processed frame
+            cv.imshow("Screen Capture", cv.resize(frame, (3070, 1920)))
+
+        # Press 'q' to exit the loop
+        if cv.waitKey(1) & 0xFF == ord('q'):
+            break
+
+    cv.destroyAllWindows()
+
+
+if __name__ == "__main__":
+    manager = SharedDataManager()
+    manager.start()
+
+    shared_data = manager.SharedData()
+
+    socket_process = multiprocessing.Process(
+        target=socketServer.run_socket_server, args=(shared_data,)
+    )
+    socket_process.start()
+
+    main_loop(shared_data)
+
+    socket_process.join()

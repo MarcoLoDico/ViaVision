@@ -1,3 +1,4 @@
+import psycopg2
 import numpy as np
 
 
@@ -11,6 +12,37 @@ def find_angle(monitor_x_position):
     angle = pixels_from_center * 0.04376
     print(f"Angle: {angle}")
     return angle
+
+
+def push_to_database(x_coordinate, y_coordinate):
+    global connection, cursor
+    try:
+        connection = psycopg2.connect(
+            # Users who have gotten this repo from GitHub can input their personal PostgreSQL database info here
+            user="coordinate_user",
+            password="",
+            host="127.0.0.1",
+            port="5432",
+            database="coordinates_db"
+        )
+
+        # The cursor can traverse the rows including inserting
+        cursor = connection.cursor()
+
+        insert_query = """INSERT INTO predicted_coordinates (x_coordinate, y_coordinate) VALUES (%s, %s)"""
+        cursor.execute(insert_query, (x_coordinate, y_coordinate))
+
+        # Confirms changes
+        connection.commit()
+
+        print(f"Coordinates ({x_coordinate}, {y_coordinate}) inserted successfully.")
+
+    except Exception as error:
+        print(f"Error inserting coordinates: {error}")
+    finally:
+        if connection:
+            cursor.close()
+            connection.close()
 
 
 def predict_coordinates(height, monitor_x_position, current_coordinates):
@@ -69,5 +101,7 @@ def predict_coordinates(height, monitor_x_position, current_coordinates):
         predicted_y = np.cos(angle_to_x_axis_from_distance) * distance
         predicted_x = np.sin(angle_to_x_axis_from_distance) * distance
         print(f"Q2: Predicted x {predicted_x}, Predicted y {predicted_y}")
+
+    push_to_database(predicted_x + current_x, predicted_y + current_y)
 
     return [predicted_x + current_x, predicted_y + current_y]
